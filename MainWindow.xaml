@@ -1,0 +1,13 @@
+﻿<Window x:Class="MonkeyPet.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="奶猴桌宠" Height="360" Width="290"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize">
+    <Grid x:Name="Root" Background="Transparent">
+        <Image x:Name="MonkeyImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+    </Grid>
+</Window>

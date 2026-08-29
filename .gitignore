@@ -1,0 +1,13 @@
+# .NET build outputs
+bin/
+obj/
+
+# Local IDE and user settings
+.vs/
+*.user
+*.suo
+
+# Source references and generated releases are kept outside this repository.
+Assets/monkey-source.jpg
+Assets/monkey.png
+*.pdb
