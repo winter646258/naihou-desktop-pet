@@ -1,0 +1,12 @@
+{
+  "CellWidth": 512,
+  "CellHeight": 512,
+  "Clips": {
+    "idle":  { "Row": 0, "Columns": 8, "Fps": 4, "Loop": true },
+    "crawl": { "Row": 1, "Columns": 8, "Fps": 8, "Loop": true },
+    "climb": { "Row": 2, "Columns": 8, "Fps": 8, "Loop": true },
+    "hang":  { "Row": 3, "Columns": 8, "Fps": 5, "Loop": true },
+    "jump":  { "Row": 4, "Columns": 8, "Fps": 10, "Loop": false },
+    "sleep": { "Row": 5, "Columns": 8, "Fps": 2, "Loop": true }
+  }
+}

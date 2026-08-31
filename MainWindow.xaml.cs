@@ -20,10 +20,11 @@ public partial class MainWindow : Window
     readonly PetSettings settings = PetSettings.Load();
     readonly Random random = new();
     readonly Forms.NotifyIcon tray = new();
+    SpriteAnimator? animator;
     BitmapSource? bitmap;
     readonly Dictionary<string, BitmapSource> frames = new();
     readonly MediaPlayer call = new();
-    IntPtr hwnd; bool dragging, interactive, paused, calling;
+    IntPtr hwnd; bool dragging, interactive, paused, calling, fullscreenHidden;
     string motion = "idle";
     System.Windows.Point dragMouse, dragWindow;
 
@@ -36,11 +37,13 @@ public partial class MainWindow : Window
 
     void LoadedPet(object? _, RoutedEventArgs e)
     {
-        frames["front"] = LoadFrame("front.png"); frames["side"] = LoadFrame("side.png"); frames["back"] = LoadFrame("back.png"); SetFrame("front"); ApplySize();
+        animator = SpriteAnimator.TryLoad();
+        frames["front"] = LoadFrame("front.png"); frames["side"] = LoadFrame("side.png"); frames["back"] = LoadFrame("back.png"); SetClip("idle", "front"); ApplySize();
         Left = double.IsNaN(settings.Left) ? SystemParameters.WorkArea.Width * .08 : settings.Left;
         Top = double.IsNaN(settings.Top) ? SystemParameters.WorkArea.Height * .55 : settings.Top;
         call.MediaEnded += (_, _) => calling = false; call.MediaFailed += (_, _) => calling = false;
-        BuildTray(); timer.Tick += (_, _) => HitTestMouse(); behavior.Tick += (_, _) => Behave(); timer.Start(); behavior.Start(); if (settings.Hidden || settings.StartMinimized) Hide();
+        settings.Hidden = settings.StartMinimized;
+        BuildTray(); timer.Tick += (_, _) => { AdvanceAnimation(.05); RestoreAfterFullscreen(); HitTestMouse(); }; behavior.Tick += (_, _) => Behave(); timer.Start(); behavior.Start(); if (settings.StartMinimized) Hide();
     }
     void NativeSetup() { hwnd = new WindowInteropHelper(this).Handle; SetWindowLong(hwnd, GwlExStyle, GetWindowLong(hwnd, GwlExStyle) | ToolWindow | NoActivate | Transparent); }
     void BuildTray()
@@ -55,6 +58,22 @@ public partial class MainWindow : Window
     void Toggle() { if (IsVisible) { settings.Hidden = true; Hide(); } else { settings.Hidden = false; Show(); Topmost = true; } settings.Save(); }
     BitmapSource LoadFrame(string name) => new BitmapImage(new Uri($"pack://application:,,,/Assets/{name}"));
     void SetFrame(string name) { bitmap = frames[name]; MonkeyImage.Source = bitmap; }
+    void SetClip(string name, string fallback)
+    {
+        if (animator?.SetClip(name) == true)
+        {
+            bitmap = animator.Current;
+            MonkeyImage.Source = bitmap;
+            return;
+        }
+        SetFrame(fallback);
+    }
+    void AdvanceAnimation(double seconds)
+    {
+        if (paused || !IsVisible || animator is null || !animator.IsLoaded) return;
+        bitmap = animator.Tick(seconds);
+        MonkeyImage.Source = bitmap;
+    }
     void HitTestMouse()
     {
         if (hwnd == IntPtr.Zero || dragging || !IsVisible) return; GetCursorPos(out var p);
@@ -71,13 +90,42 @@ public partial class MainWindow : Window
     void EndDrag() { if (!dragging) return; dragging = false; ReleaseMouseCapture(); settings.Left = Left; settings.Top = Top; settings.Save(); }
     void Behave()
     {
-        if (paused || !IsVisible) return; if (Fullscreen()) { Hide(); settings.Hidden = true; settings.Save(); return; }
+        if (paused || !IsVisible) return; if (Fullscreen()) { fullscreenHidden = true; Hide(); return; }
+        var activity = random.NextDouble();
+        if (activity < .14)
+        {
+            motion = "sleep";
+            SetClip(motion, "front");
+            MonkeyImage.RenderTransform = Transform.Identity;
+            return;
+        }
+        if (activity < .32)
+        {
+            motion = "idle";
+            SetClip(motion, "front");
+            MonkeyImage.RenderTransform = Transform.Identity;
+            return;
+        }
         var (p, side) = EdgeTarget(); var seconds = 1.4 + random.NextDouble() * 1.8;
-        motion = side is 0 or 1 ? "crawl" : "climb"; SetFrame(motion == "crawl" ? "side" : "front");
+        motion = side is 0 or 1 ? "crawl" : "climb";
+        if (side == 1 && random.NextDouble() < .28) motion = "hang";
+        else if (side is 0 or 1 && random.NextDouble() < .20) motion = "jump";
+        SetClip(motion, motion == "crawl" ? "side" : "front");
         BeginAnimation(LeftProperty, new DoubleAnimation(p.X, TimeSpan.FromSeconds(seconds)) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut } });
         BeginAnimation(TopProperty, new DoubleAnimation(p.Y, TimeSpan.FromSeconds(seconds)) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut } });
-        var transforms = new TransformGroup(); var scale = new ScaleTransform(1, 1); var rotate = new RotateTransform(side == 2 ? -90 : side == 3 ? 90 : 0); transforms.Children.Add(scale); transforms.Children.Add(rotate); MonkeyImage.RenderTransformOrigin = new System.Windows.Point(.5, .5); MonkeyImage.RenderTransform = transforms;
-        var b = new DoubleAnimation(1, 1.09, TimeSpan.FromMilliseconds(220)) { AutoReverse = true, RepeatBehavior = new RepeatBehavior(3) }; scale.BeginAnimation(ScaleTransform.ScaleXProperty, b); scale.BeginAnimation(ScaleTransform.ScaleYProperty, b);
+        var direction = p.X < Left && side is 0 or 1 ? -1d : 1d;
+        var transforms = new TransformGroup(); var scale = new ScaleTransform(direction, 1); var rotate = new RotateTransform(animator is null && (side == 2 || side == 3) ? side == 2 ? -90 : 90 : 0); transforms.Children.Add(scale); transforms.Children.Add(rotate); MonkeyImage.RenderTransformOrigin = new System.Windows.Point(.5, .5); MonkeyImage.RenderTransform = transforms;
+        var bounceX = new DoubleAnimation(direction, direction * 1.09, TimeSpan.FromMilliseconds(220)) { AutoReverse = true, RepeatBehavior = new RepeatBehavior(3) };
+        var bounceY = new DoubleAnimation(1, 1.09, TimeSpan.FromMilliseconds(220)) { AutoReverse = true, RepeatBehavior = new RepeatBehavior(3) };
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, bounceX); scale.BeginAnimation(ScaleTransform.ScaleYProperty, bounceY);
+    }
+    void RestoreAfterFullscreen()
+    {
+        if (!fullscreenHidden || Fullscreen()) return;
+        fullscreenHidden = false;
+        if (settings.Hidden) return;
+        Show();
+        Topmost = true;
     }
     (System.Windows.Point point, int side) EdgeTarget()
     {
@@ -86,7 +134,13 @@ public partial class MainWindow : Window
         return side switch { 0 => (new System.Windows.Point(work.Left, work.Top + random.NextDouble() * (work.Height - ActualHeight)), side), 1 => (new System.Windows.Point(work.Right - ActualWidth, work.Top + random.NextDouble() * (work.Height - ActualHeight)), side), 2 => (new System.Windows.Point(work.Left + random.NextDouble() * (work.Width - ActualWidth), work.Top), side), _ => (new System.Windows.Point(work.Left + random.NextDouble() * (work.Width - ActualWidth), work.Bottom - ActualHeight), side) };
     }
     static double Clamp(double n, double lo, double hi) => Math.Max(lo, Math.Min(hi, n));
-    bool Fullscreen() { var h = GetForegroundWindow(); if (h == IntPtr.Zero) return false; GetWindowRect(h, out var r); var w = SystemParameters.WorkArea; return r.Left <= w.Left && r.Top <= w.Top && r.Right >= w.Right && r.Bottom >= w.Bottom; }
+    bool Fullscreen()
+    {
+        var h = GetForegroundWindow(); if (h == IntPtr.Zero) return false;
+        GetWindowRect(h, out var r); var monitor = MonitorFromWindow(h, 2); if (monitor == IntPtr.Zero) return false;
+        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() }; if (!GetMonitorInfo(monitor, ref info)) return false;
+        return r.Left <= info.Monitor.Left && r.Top <= info.Monitor.Top && r.Right >= info.Monitor.Right && r.Bottom >= info.Monitor.Bottom;
+    }
     void ApplySize() { Height = SystemParameters.WorkArea.Height * settings.Size / 100; Width = Height * .83; }
     void PlayCall()
     {
@@ -102,8 +156,8 @@ public partial class MainWindow : Window
         var dialog = new Window { Title = "设置", Content = stack, SizeToContent = SizeToContent.WidthAndHeight, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterScreen, Topmost = true }; save.Click += (_, _) => { settings.Size = size.Value; settings.Volume = volume.Value; settings.Muted = muted.IsChecked == true; settings.AutoStart = auto.IsChecked == true; settings.StartMinimized = mini.IsChecked == true; ApplySize(); settings.Save(); dialog.Close(); }; dialog.ShowDialog();
     }
     static IEnumerable<(IntPtr h, Rect r, bool visible, bool minimized)> Windows() { var list = new List<(IntPtr, Rect, bool, bool)>(); EnumWindows((h, _) => { GetWindowRect(h, out var r); if (IsWindowVisible(h) && r.Right-r.Left > 100 && r.Bottom-r.Top > 100) list.Add((h, new Rect(r.Left,r.Top,r.Right-r.Left,r.Bottom-r.Top), true, IsIconic(h))); return true; }, IntPtr.Zero); return list; }
-    delegate bool EnumProc(IntPtr h, IntPtr l); [StructLayout(LayoutKind.Sequential)] struct P { public int X,Y; } [StructLayout(LayoutKind.Sequential)] struct R { public int Left,Top,Right,Bottom; }
-    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h,int i); [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h,int i,int v); [DllImport("user32.dll")] static extern bool GetCursorPos(out P p); [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out R r); [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h); [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p,IntPtr l);
+    delegate bool EnumProc(IntPtr h, IntPtr l); [StructLayout(LayoutKind.Sequential)] struct P { public int X,Y; } [StructLayout(LayoutKind.Sequential)] struct R { public int Left,Top,Right,Bottom; } [StructLayout(LayoutKind.Sequential)] struct MonitorInfo { public int Size; public R Monitor; public R Work; public uint Flags; }
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h,int i); [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h,int i,int v); [DllImport("user32.dll")] static extern bool GetCursorPos(out P p); [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out R r); [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h); [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p,IntPtr l); [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint flags); [DllImport("user32.dll", CharSet = CharSet.Auto)] static extern bool GetMonitorInfo(IntPtr h, ref MonitorInfo info);
 }
 
 sealed class PetSettings
